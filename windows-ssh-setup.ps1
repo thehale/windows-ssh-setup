@@ -146,7 +146,8 @@ function Add-Package($id) {
 		--silent `
 		--scope machine `
 		--accept-package-agreements `
-		--accept-source-agreements
+		--accept-source-agreements `
+		--disable-interactivity
 }
 
 function Assert-Winget {
@@ -221,30 +222,41 @@ Windows will ask for administrator approval to:
 function Start-Elevated($path, $arguments) {
 	$log = "$path.log"
 	try {
-		$exitCode = Wait-Elevated "& { try { & '$path' $arguments } catch { `$_; exit 1 } } *> '$log'"
-		Get-Content $log
+		$process = Start-AdministratorPowerShell "& { try { & '$path' $arguments } catch { `$_; exit 1 } } *> '$log'"
+		Watch-Log $process $log
 	} finally {
 		Remove-Item $log -ErrorAction SilentlyContinue
 	}
-	if ($exitCode -ne 0) {
+	if ($process.ExitCode -ne 0) {
 		throw 'The administrator PowerShell stopped early. Its messages above say why.'
 	}
 }
 
-function Wait-Elevated($command) {
+function Start-AdministratorPowerShell($command) {
 	$launch = @{
 		FilePath     = (Get-Process -Id $PID).Path
 		ArgumentList = '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $command
 		Verb         = 'RunAs'
 		WindowStyle  = 'Hidden'
-		Wait         = $true
 		PassThru     = $true
 	}
 	try {
-		(Start-Process @launch).ExitCode
+		Start-Process @launch
 	} catch {
 		throw "Windows did not get administrator approval.`nRerun and choose Yes when asked, or run this from an administrator PowerShell."
 	}
+	Write-Host 'Approved. Working as administrator:'
+}
+
+function Watch-Log($process, $log) {
+	$shown = 0
+	do {
+		Start-Sleep -Milliseconds 500
+		$exited = $process.HasExited
+		$lines = @(Get-Content $log -ErrorAction SilentlyContinue)
+		$lines | Select-Object -Skip $shown
+		$shown = [Math]::Max($shown, $lines.Count)
+	} until ($exited)
 }
 
 function Assert-Sshd {
